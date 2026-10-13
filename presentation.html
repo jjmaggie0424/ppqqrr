@@ -1,0 +1,1286 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>互動式教學簡報動畫 (Web Speech API 瀏覽器語音)</title>
+  <!-- Tailwind CSS via allowed Google Static CDN -->
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    /* 核心設計系統與動態效果 */
+    :root {
+      --bg-gradient-from: #0f172a;
+      --bg-gradient-to: #1e1b4b;
+      --accent: #6366f1;
+      --accent-glow: rgba(99, 102, 241, 0.35);
+    }
+    
+    body {
+      background: linear-gradient(135deg, #0b0f19 0%, #111827 50%, #1e1b4b 100%);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang TC', 'Microsoft JhengHei', sans-serif;
+      min-height: 100vh;
+      overflow-x: hidden;
+      color: #f3f4f6;
+    }
+
+    /* 語音波形動畫 */
+    .wave-bar {
+      transition: height 0.15s ease-in-out;
+      transform-origin: bottom;
+    }
+    .speaking .wave-bar {
+      animation: wavePulse 1.2s infinite ease-in-out alternate;
+    }
+    .speaking .wave-bar:nth-child(1) { animation-delay: 0.1s; }
+    .speaking .wave-bar:nth-child(2) { animation-delay: 0.25s; }
+    .speaking .wave-bar:nth-child(3) { animation-delay: 0.05s; }
+    .speaking .wave-bar:nth-child(4) { animation-delay: 0.3s; }
+    .speaking .wave-bar:nth-child(5) { animation-delay: 0.15s; }
+
+    @keyframes wavePulse {
+      0% { height: 6px; }
+      50% { height: 26px; }
+      100% { height: 10px; }
+    }
+
+    /* 投影片切換過渡 */
+    .slide-enter {
+      opacity: 0;
+      transform: translateY(18px) scale(0.98);
+      transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .slide-enter-active {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+
+    /* 要點逐項飛入動畫 */
+    .bullet-item {
+      opacity: 0;
+      transform: translateX(-16px);
+      transition: all 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .bullet-item.visible {
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    /* 發光邊框效果 */
+    .glow-card {
+      background: rgba(30, 41, 59, 0.7);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.5), 0 0 20px -5px var(--accent-glow);
+    }
+
+    /* 自訂滾動條 */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(15, 23, 42, 0.6);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #4b5563;
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #6b7280;
+    }
+  </style>
+</head>
+<body class="flex flex-col h-screen select-none">
+
+  <!-- 頂部導航列 -->
+  <header class="h-16 border-b border-slate-800 bg-slate-900/80 backdrop-blur-md px-6 flex items-center justify-between shrink-0 z-20">
+    <div class="flex items-center space-x-3">
+      <div class="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-500/30 text-white font-bold text-lg">
+        ✦
+      </div>
+      <div>
+        <h1 class="text-base font-semibold tracking-wide text-white flex items-center gap-2">
+          <span id="headerLessonTitle">互動教學簡報</span>
+          <span class="text-xs bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-full font-mono">Web Speech API</span>
+        </h1>
+        <p class="text-xs text-slate-400">瀏覽器原生發音 · 智慧動畫導覽</p>
+      </div>
+    </div>
+
+    <!-- 頂部控制項目 -->
+    <div class="flex items-center space-x-3">
+      <!-- 語音波形指示器 -->
+      <div id="voiceIndicator" class="flex items-center space-x-1.5 px-3 py-1.5 rounded-full bg-slate-800/80 border border-slate-700/60 transition-all">
+        <div class="flex items-end space-x-1 h-5 w-12 justify-center" id="waveContainer">
+          <div class="w-1.5 h-1.5 bg-slate-500 rounded-full wave-bar"></div>
+          <div class="w-1.5 h-2 bg-slate-500 rounded-full wave-bar"></div>
+          <div class="w-1.5 h-3 bg-slate-500 rounded-full wave-bar"></div>
+          <div class="w-1.5 h-2 bg-slate-500 rounded-full wave-bar"></div>
+          <div class="w-1.5 h-1.5 bg-slate-500 rounded-full wave-bar"></div>
+        </div>
+        <span id="voiceStatusText" class="text-xs text-slate-400 font-medium">語音待命</span>
+      </div>
+
+      <!-- 語音設定按鈕 -->
+      <button id="btnVoiceSettings" class="px-3 py-1.5 text-xs rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 transition flex items-center gap-1.5" title="調整語音、語速與語調">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 100-6 3 3 0 000 6z"></path></svg>
+        語音設定
+      </button>
+
+      <!-- 編輯/匯入教材按鈕 -->
+      <button id="btnEditMaterial" class="px-3.5 py-1.5 text-xs rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium shadow-md shadow-indigo-600/30 transition flex items-center gap-1.5">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+        編輯/匯入教材
+      </button>
+
+      <!-- 全螢幕切換 -->
+      <button id="btnFullscreen" class="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition" title="全螢幕模式 (F)">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"></path></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- 主舞台工作區 -->
+  <div class="flex-1 flex overflow-hidden relative">
+
+    <!-- 左側投影片清單縮圖欄 (可收合) -->
+    <aside id="sidebarThumbnails" class="w-64 border-r border-slate-800 bg-slate-950/60 flex flex-col shrink-0 transition-all duration-300">
+      <div class="p-3 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400 font-semibold tracking-wider uppercase">
+        <span>章節導覽 (<span id="slideTotalCount">6</span>)</span>
+        <button id="btnToggleAutoNext" class="text-[11px] text-indigo-400 hover:text-indigo-300 flex items-center gap-1 cursor-pointer" title="語音朗讀完成後自動跳到下一頁">
+          <input type="checkbox" id="chkAutoNext" checked class="rounded border-slate-700 bg-slate-800 text-indigo-600 focus:ring-0 cursor-pointer">
+          <label for="chkAutoNext" class="cursor-pointer">自動換頁</label>
+        </button>
+      </div>
+      <div id="thumbnailsList" class="flex-1 overflow-y-auto p-3 space-y-2.5">
+        <!-- 縮圖卡片動態產生 -->
+      </div>
+    </aside>
+
+    <!-- 中央簡報畫布主區 -->
+    <main class="flex-1 flex flex-col justify-between p-6 md:p-10 relative overflow-hidden">
+      
+      <!-- 簡報卡片容器 (16:9比例與高質感玻璃擬態) -->
+      <div class="w-full max-w-5xl mx-auto flex-1 flex flex-col justify-center">
+        <div id="slideCard" class="glow-card rounded-2xl p-8 md:p-12 relative overflow-hidden transition-all duration-500 min-h-[440px] flex flex-col justify-between">
+          
+          <!-- 背景光暈裝飾 -->
+          <div class="absolute -right-20 -top-20 w-80 h-80 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none"></div>
+          <div class="absolute -left-20 -bottom-20 w-80 h-80 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none"></div>
+
+          <!-- 投影片頂部單元標籤與序號 -->
+          <div class="flex items-center justify-between mb-4 z-10">
+            <span id="slideTag" class="px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+              單元 01 · 課程導讀
+            </span>
+            <span id="slideCounterBadge" class="text-xs text-slate-400 font-mono">
+              01 / 06
+            </span>
+          </div>
+
+          <!-- 標題與副標題 -->
+          <div class="z-10 mb-6">
+            <h2 id="slideTitle" class="text-3xl md:text-4xl font-extrabold text-white tracking-tight leading-snug drop-shadow-sm">
+              投影片標題載入中...
+            </h2>
+            <p id="slideSubtitle" class="text-slate-300 text-base md:text-lg mt-2 font-light">
+              投影片副標題或核心概念說明
+            </p>
+          </div>
+
+          <!-- 內容展示區：左側要點 + 右側視覺化卡片 -->
+          <div class="grid grid-cols-1 md:grid-cols-12 gap-8 items-center z-10 flex-1 my-2">
+            <!-- 左側：重點條列動畫 -->
+            <div id="bulletContainer" class="md:col-span-7 space-y-3.5">
+              <!-- 動態生成 bullet-item -->
+            </div>
+
+            <!-- 右側：教學動畫圖解卡片 -->
+            <div class="md:col-span-5 flex items-center justify-center">
+              <div id="visualCardContainer" class="w-full bg-slate-900/80 border border-slate-700/60 rounded-xl p-5 shadow-inner flex flex-col items-center justify-center text-center relative overflow-hidden min-h-[200px]">
+                <!-- 動態注入視覺化圖示/流程 -->
+              </div>
+            </div>
+          </div>
+
+          <!-- 底部同步旁白字幕條 (即時字幕) -->
+          <div class="mt-6 pt-4 border-t border-slate-800/80 flex items-start gap-3 z-10">
+            <div class="p-1.5 rounded-md bg-indigo-500/20 text-indigo-400 shrink-0 mt-0.5">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"></path></svg>
+            </div>
+            <div class="flex-1">
+              <div class="text-[11px] text-slate-400 uppercase tracking-wider font-semibold">同步教學口白（語音稿）</div>
+              <p id="slideSpeechScript" class="text-slate-200 text-sm md:text-base leading-relaxed mt-0.5 font-normal">
+                語音文稿載入中...
+              </p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- 簡報底部控制列 (播放控制/翻頁/進度條) -->
+      <footer class="w-full max-w-5xl mx-auto mt-4 shrink-0">
+        <!-- 播放進度條 -->
+        <div class="w-full bg-slate-800/90 h-1.5 rounded-full overflow-hidden mb-3">
+          <div id="progressBar" class="bg-gradient-to-r from-indigo-500 to-cyan-400 h-full transition-all duration-300 w-1/6"></div>
+        </div>
+
+        <div class="flex items-center justify-between px-2">
+          <!-- 上一頁 / 快速快速鍵提示 -->
+          <div class="flex items-center space-x-2">
+            <button id="btnPrevSlide" class="px-4 py-2 rounded-xl bg-slate-800/90 hover:bg-slate-700 border border-slate-700 text-slate-200 text-sm font-medium transition flex items-center gap-1.5 shadow-sm active:scale-95">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+              上一頁
+            </button>
+            <span class="text-xs text-slate-400 hidden sm:inline-block">快捷鍵：← 上一頁 / → 下一頁</span>
+          </div>
+
+          <!-- 核心控制：播放語音 / 暫停 / 重播 -->
+          <div class="flex items-center space-x-3">
+            <button id="btnReplayAudio" class="p-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/80 transition" title="重新播放本頁語音">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+            </button>
+
+            <button id="btnPlayPause" class="px-6 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-semibold text-sm shadow-lg shadow-indigo-600/30 transition flex items-center gap-2 active:scale-95">
+              <svg id="iconPlay" class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+              <svg id="iconPause" class="w-4 h-4 fill-current hidden" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+              <span id="playPauseText">播放教學</span>
+            </button>
+          </div>
+
+          <!-- 下一頁 -->
+          <div class="flex items-center space-x-2">
+            <button id="btnNextSlide" class="px-4 py-2 rounded-xl bg-slate-800/90 hover:bg-slate-700 border border-slate-700 text-slate-200 text-sm font-medium transition flex items-center gap-1.5 shadow-sm active:scale-95">
+              下一頁
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+            </button>
+          </div>
+        </div>
+      </footer>
+
+    </main>
+  </div>
+
+  <!-- 彈出視窗 1：語音朗讀設定 (Web Speech API Settings) -->
+  <div id="modalVoiceSettings" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md p-6 shadow-2xl relative">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+        <h3 class="text-base font-semibold text-white flex items-center gap-2">
+          <span>🔊</span> 瀏覽器預設語音設定
+        </h3>
+        <button id="btnCloseVoiceModal" class="text-slate-400 hover:text-white p-1 rounded-lg">✕</button>
+      </div>
+
+      <div class="mt-4 space-y-4">
+        <!-- 語音聲音選擇 (Voice Selection) -->
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">朗讀語音 (Voice Engine)</label>
+          <select id="selectVoice" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500">
+            <option value="">載入系統語音清單中...</option>
+          </select>
+          <p class="text-[11px] text-slate-400 mt-1">自動優先選擇繁體中文 (zh-TW) 或中文預設音色。</p>
+        </div>
+
+        <!-- 語速 (Rate) -->
+        <div>
+          <div class="flex justify-between text-xs text-slate-300 mb-1">
+            <span>語速 (Speed)</span>
+            <span id="labelRate" class="text-indigo-400 font-mono">1.0x</span>
+          </div>
+          <input type="range" id="rangeRate" min="0.5" max="2.0" step="0.1" value="1.0" class="w-full accent-indigo-500 cursor-pointer">
+          <div class="flex justify-between text-[10px] text-slate-500">
+            <span>0.5x 慢速</span>
+            <span>1.0x 標準</span>
+            <span>2.0x 快速</span>
+          </div>
+        </div>
+
+        <!-- 音調 (Pitch) -->
+        <div>
+          <div class="flex justify-between text-xs text-slate-300 mb-1">
+            <span>音調 (Pitch)</span>
+            <span id="labelPitch" class="text-indigo-400 font-mono">1.0</span>
+          </div>
+          <input type="range" id="rangePitch" min="0.5" max="1.5" step="0.1" value="1.0" class="w-full accent-indigo-500 cursor-pointer">
+        </div>
+
+        <!-- 測試試聽按鈕 -->
+        <div class="pt-2">
+          <button id="btnTestVoice" class="w-full py-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg text-sm text-slate-200 font-medium transition flex items-center justify-center gap-2">
+            <span>▶ 試聽目前語音效果</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 彈出視窗 2：教材自訂編輯與匯入 (Material Editor / Importer) -->
+  <div id="modalEditor" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+      
+      <!-- 視窗標題 -->
+      <div class="px-6 py-4 border-b border-slate-800 flex items-center justify-between shrink-0">
+        <div>
+          <h3 class="text-base font-bold text-white flex items-center gap-2">
+            <span>📝</span> 教材內容編輯與匯入
+          </h3>
+          <p class="text-xs text-slate-400">您可以直接修改現有投影片，或貼上大綱/JSON 一鍵產生自訂簡報</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <button id="btnResetDefault" class="text-xs text-slate-400 hover:text-rose-400 px-2 py-1 rounded border border-slate-700 hover:border-rose-800 transition">
+            重設回預設教材
+          </button>
+          <button id="btnCloseEditorModal" class="text-slate-400 hover:text-white p-1 rounded-lg">✕</button>
+        </div>
+      </div>
+
+      <!-- 頁籤切換：視覺化列表 vs 純文字/JSON匯入 -->
+      <div class="flex border-b border-slate-800 px-6 shrink-0 bg-slate-950/40">
+        <button id="tabVisual" class="py-2.5 px-4 text-xs font-semibold text-indigo-400 border-b-2 border-indigo-500 transition">
+          逐頁編輯模式
+        </button>
+        <button id="tabJson" class="py-2.5 px-4 text-xs font-semibold text-slate-400 hover:text-slate-200 transition">
+          快速匯入文字 / JSON
+        </button>
+      </div>
+
+      <!-- 內容面板 1：逐頁視覺化編輯 -->
+      <div id="panelVisual" class="flex-1 overflow-y-auto p-6 space-y-5">
+        <div class="flex justify-between items-center mb-2">
+          <span class="text-xs text-slate-400">點擊投影片即可直接編輯內容與語音朗讀稿：</span>
+          <button id="btnAddSlide" class="px-3 py-1.5 text-xs bg-indigo-600/90 hover:bg-indigo-500 text-white rounded-lg font-medium transition flex items-center gap-1">
+            + 新增一頁投影片
+          </button>
+        </div>
+        <div id="editorSlideList" class="space-y-4">
+          <!-- 動態生成編輯卡片 -->
+        </div>
+      </div>
+
+      <!-- 內容面板 2：JSON / 格式化文字快速匯入 -->
+      <div id="panelJson" class="flex-1 overflow-y-auto p-6 hidden flex-col">
+        <p class="text-xs text-slate-300 mb-2">
+          您可以直接編輯或貼上下方的 JSON 資料架構，點擊「匯入並立即套用」即可即時轉換為動態教學簡報：
+        </p>
+        <textarea id="txtJsonImport" class="flex-1 w-full bg-slate-950 border border-slate-800 rounded-xl p-4 font-mono text-xs text-slate-200 focus:outline-none focus:border-indigo-500 resize-none h-80 leading-relaxed"></textarea>
+      </div>
+
+      <!-- 視窗底部按鈕 -->
+      <div class="px-6 py-4 border-t border-slate-800 bg-slate-950/80 flex items-center justify-between shrink-0">
+        <button id="btnExportJson" class="text-xs text-indigo-400 hover:text-indigo-300 underline">
+          匯出目前教材為 JSON 檔案
+        </button>
+        <div class="flex space-x-3">
+          <button id="btnCancelEdit" class="px-4 py-2 text-xs rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 transition">
+            取消
+          </button>
+          <button id="btnSaveMaterial" class="px-5 py-2 text-xs rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold shadow-md shadow-indigo-600/30 transition">
+            儲存並套用教材
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- 核心邏輯 JavaScript -->
+  <script>
+    // 預設高品質教材範例 (AI 智能教學與人機協作)
+    const INITIAL_LESSON_DATA = [
+      {
+        id: 1,
+        tag: "單元 01 · 課程簡介",
+        title: "探索 AI 智能輔助教學的新時代",
+        subtitle: "啟動人機協作思維，打造個人化與沉浸式學習體驗",
+        speech: "各位同學好！歡迎來到本單元的教學課程。今天我們將一起探索人工智慧如何改變教學與日常工作，學習如何與 AI 高效協作，激發無限的學習潛能。",
+        visualType: "badge",
+        visualData: {
+          icon: "🚀",
+          label: "新世代學習革命",
+          desc: "從單向接收轉化為主動互動引導"
+        },
+        bullets: [
+          "理解生成式人工智慧在教育與工作場景的顛覆性價值",
+          "掌握雙向對話、精準提問與反思驗證的核心技能",
+          "體驗瀏覽器原生的語音朗讀與視覺動態同步技術"
+        ]
+      },
+      {
+        id: 2,
+        tag: "單元 02 · 核心原理",
+        title: "什麼是大型語言模型 (LLM)？",
+        subtitle: "深入理解文字機率預測與上下文關聯的運作本質",
+        speech: "在第二單元中，我們來探討大型語言模型的核心原理。LLM 本質上是一個巨大的機率運算模型，透過吸收數十億筆文字資料，學會預測句子中的下一個最可能的字詞。",
+        visualType: "pipeline",
+        visualData: {
+          step1: "文字斷詞 (Tokens)",
+          step2: "注意力機制 (Attention)",
+          step3: "最佳預測輸出 (Output)"
+        },
+        bullets: [
+          "Token 機制：電腦將文字切分為微小片段進行特徵計算",
+          "Transformer 架構：具備強大的長文本上下文注意力理解力",
+          "關鍵認知：AI 是機率生成的協作夥伴，仍需人類智慧把關"
+        ]
+      },
+      {
+        id: 3,
+        tag: "單元 03 · 提問技巧",
+        title: "精準提示詞 (Prompt) 四步架構法",
+        subtitle: "學會清晰表達指令，讓 AI 成為精準滿足需求的導師",
+        speech: "接下來是實用技巧！如何向 AI 提出高品質的問題？請記住這四步口訣：設定角色、指明任務、提供背景情境、並規定格式要求。",
+        visualType: "framework",
+        visualData: {
+          items: ["角色設定 (Role)", "明確任務 (Task)", "背景資訊 (Context)", "輸出規範 (Format)"]
+        },
+        bullets: [
+          "角色定位：賦予 AI 專家背景，例如『請擔任高中歷史老師』",
+          "任務焦點：明確界定需要完成的目標與分析範圍",
+          "輸出規格：指定條列、表格、字數或針對初學者的語氣"
+        ]
+      },
+      {
+        id: 4,
+        tag: "單元 04 · 應用實戰",
+        title: "三大主流情境的賦能與突破",
+        subtitle: "將 AI 融入寫作編修、程式開發與資料歸納",
+        speech: "在第四單元中，我們整理了最廣泛的三大實用場景。無論是文章摘要、邏輯檢查，還是程式代碼除錯，AI 都能大幅節省重複性工作時間。",
+        visualType: "cards",
+        visualData: {
+          c1: { title: "知識歸納", desc: "迅速提煉冗長報告要點" },
+          c2: { title: "程式輔助", desc: "邏輯推理與自動除錯" },
+          c3: { title: "創意思考", desc: "腦力激盪與方案發想" }
+        },
+        bullets: [
+          "知識快萃：將長篇論文或講義濃縮為結構化觀念摘要",
+          "即時陪練：做為 24 小時不間斷的程式助教與語言練習對象",
+          "觀點對照：透過多角度質疑，幫助學習者突破思考盲區"
+        ]
+      },
+      {
+        id: 5,
+        tag: "單元 05 · 思辨準則",
+        title: "安全使用原則：倫理與查證機制",
+        subtitle: "防範 AI 幻覺，建立求真求實的數位素養",
+        speech: "使用 AI 的同時，我們必須保持清晰的批判性思考。AI 可能會產生看似合理但實際上錯誤的幻覺內容，因此雙重查證與保護隱私至關重要。",
+        visualType: "safety",
+        visualData: {
+          rule1: "永遠核對重要事實與數據來源",
+          rule2: "避免上傳機密隱私與敏感個人資訊",
+          rule3: "秉持誠信原則，標註 AI 協作痕跡"
+        },
+        bullets: [
+          "警惕幻覺 (Hallucination)：對專有名詞與引述來源嚴格查證",
+          "保護資安與隱私：切勿將個人密碼或敏感資料直接餵給模型",
+          "人機互補：以人類價值觀與同理心作為最終決策依據"
+        ]
+      },
+      {
+        id: 6,
+        tag: "單元 06 · 結語回顧",
+        title: "總結回顧與課後實作指引",
+        subtitle: "實踐是最佳的學習途徑，立即嘗試設計專屬的提示詞！",
+        speech: "恭喜您完成本單元的所有學習！現在輪到您親自動手實踐了。請試著運用今天學到的提示詞技巧，向 AI 提出一個與您專業相關的課題吧！感謝您的聆聽。",
+        visualType: "finish",
+        visualData: {
+          badge: "🎉 學習完成！",
+          msg: "動手實作，開啟您的智能學習之旅"
+        },
+        bullets: [
+          "今天學習了：LLM 基本原理、提示詞四大架構與查證原則",
+          "課後練習：選定一門學科，引導 AI 為您生成 3 題測驗練習",
+          "保持好奇心，持之以恆探索與體驗嶄新工具！"
+        ]
+      }
+    ];
+
+    // 狀態管理
+    class PresentationApp {
+      constructor() {
+        this.slides = this.loadSlides();
+        this.currentSlideIndex = 0;
+        this.isPlaying = false;
+        this.isSpeaking = false;
+        this.autoNext = true;
+        
+        // 語音相關變數
+        this.speechSynth = window.speechSynthesis;
+        this.currentUtterance = null;
+        this.availableVoices = [];
+        this.selectedVoice = null;
+        this.speechRate = 1.0;
+        this.speechPitch = 1.0;
+
+        // DOM 元素引用
+        this.initDomReferences();
+        // 初始化事件監聽
+        this.initEventListeners();
+        // 初始化 Web Speech API
+        this.initSpeechEngine();
+        // 渲染初始畫面
+        this.renderCurrentSlide();
+        this.renderThumbnails();
+      }
+
+      // 從 LocalStorage 載入或使用預設教材
+      loadSlides() {
+        const saved = localStorage.getItem("presentation_slides_data");
+        if (saved) {
+          try {
+            return JSON.parse(saved);
+          } catch(e) {
+            console.error("Failed to parse saved slides:", e);
+          }
+        }
+        return JSON.parse(JSON.stringify(INITIAL_LESSON_DATA));
+      }
+
+      saveSlides(slides) {
+        this.slides = slides;
+        localStorage.setItem("presentation_slides_data", JSON.stringify(slides));
+        this.renderThumbnails();
+        this.renderCurrentSlide();
+      }
+
+      initDomReferences() {
+        this.el = {
+          headerTitle: document.getElementById("headerLessonTitle"),
+          slideCard: document.getElementById("slideCard"),
+          slideTag: document.getElementById("slideTag"),
+          slideCounterBadge: document.getElementById("slideCounterBadge"),
+          slideTitle: document.getElementById("slideTitle"),
+          slideSubtitle: document.getElementById("slideSubtitle"),
+          bulletContainer: document.getElementById("bulletContainer"),
+          visualContainer: document.getElementById("visualCardContainer"),
+          speechScript: document.getElementById("slideSpeechScript"),
+          progressBar: document.getElementById("progressBar"),
+          slideTotalCount: document.getElementById("slideTotalCount"),
+          thumbnailsList: document.getElementById("thumbnailsList"),
+          
+          // 按鈕
+          btnPrev: document.getElementById("btnPrevSlide"),
+          btnNext: document.getElementById("btnNextSlide"),
+          btnPlayPause: document.getElementById("btnPlayPause"),
+          btnReplay: document.getElementById("btnReplayAudio"),
+          iconPlay: document.getElementById("iconPlay"),
+          iconPause: document.getElementById("iconPause"),
+          playPauseText: document.getElementById("playPauseText"),
+          chkAutoNext: document.getElementById("chkAutoNext"),
+          
+          // 語音指示器
+          voiceIndicator: document.getElementById("voiceIndicator"),
+          voiceStatusText: document.getElementById("voiceStatusText"),
+          
+          // 模態視窗與設定
+          btnVoiceSettings: document.getElementById("btnVoiceSettings"),
+          modalVoiceSettings: document.getElementById("modalVoiceSettings"),
+          btnCloseVoiceModal: document.getElementById("btnCloseVoiceModal"),
+          selectVoice: document.getElementById("selectVoice"),
+          rangeRate: document.getElementById("rangeRate"),
+          rangePitch: document.getElementById("rangePitch"),
+          labelRate: document.getElementById("labelRate"),
+          labelPitch: document.getElementById("labelPitch"),
+          btnTestVoice: document.getElementById("btnTestVoice"),
+
+          // 編輯教材視窗
+          btnEditMaterial: document.getElementById("btnEditMaterial"),
+          modalEditor: document.getElementById("modalEditor"),
+          btnCloseEditorModal: document.getElementById("btnCloseEditorModal"),
+          btnCancelEdit: document.getElementById("btnCancelEdit"),
+          btnSaveMaterial: document.getElementById("btnSaveMaterial"),
+          btnResetDefault: document.getElementById("btnResetDefault"),
+          btnExportJson: document.getElementById("btnExportJson"),
+          tabVisual: document.getElementById("tabVisual"),
+          tabJson: document.getElementById("tabJson"),
+          panelVisual: document.getElementById("panelVisual"),
+          panelJson: document.getElementById("panelJson"),
+          editorSlideList: document.getElementById("editorSlideList"),
+          btnAddSlide: document.getElementById("btnAddSlide"),
+          txtJsonImport: document.getElementById("txtJsonImport"),
+          btnFullscreen: document.getElementById("btnFullscreen")
+        };
+      }
+
+      initEventListeners() {
+        // 翻頁控制
+        this.el.btnPrev.addEventListener("click", () => this.prevSlide());
+        this.el.btnNext.addEventListener("click", () => this.nextSlide());
+        
+        // 播放 / 暫停
+        this.el.btnPlayPause.addEventListener("click", () => this.togglePlayPause());
+        this.el.btnReplay.addEventListener("click", () => this.speakCurrentSlide());
+
+        // 自動翻頁開關
+        this.el.chkAutoNext.addEventListener("change", (e) => {
+          this.autoNext = e.target.checked;
+        });
+
+        // 鍵盤快速鍵
+        window.addEventListener("keydown", (e) => {
+          if (["input", "textarea"].includes(document.activeElement.tagName.toLowerCase())) return;
+          if (e.key === "ArrowRight" || e.key === "PageDown") {
+            e.preventDefault();
+            this.nextSlide();
+          } else if (e.key === "ArrowLeft" || e.key === "PageUp") {
+            e.preventDefault();
+            this.prevSlide();
+          } else if (e.key === " " || e.key === "Enter") {
+            e.preventDefault();
+            this.togglePlayPause();
+          } else if (e.key === "f" || e.key === "F") {
+            this.toggleFullscreen();
+          }
+        });
+
+        // 語音設定視窗
+        this.el.btnVoiceSettings.addEventListener("click", () => {
+          this.el.modalVoiceSettings.classList.remove("hidden");
+        });
+        this.el.btnCloseVoiceModal.addEventListener("click", () => {
+          this.el.modalVoiceSettings.classList.add("hidden");
+        });
+        this.el.selectVoice.addEventListener("change", (e) => {
+          const voiceUri = e.target.value;
+          this.selectedVoice = this.availableVoices.find(v => v.voiceURI === voiceUri) || null;
+        });
+        this.el.rangeRate.addEventListener("input", (e) => {
+          this.speechRate = parseFloat(e.target.value);
+          this.el.labelRate.textContent = `${this.speechRate.toFixed(1)}x`;
+        });
+        this.el.rangePitch.addEventListener("input", (e) => {
+          this.speechPitch = parseFloat(e.target.value);
+          this.el.labelPitch.textContent = this.speechPitch.toFixed(1);
+        });
+        this.el.btnTestVoice.addEventListener("click", () => {
+          this.testVoice();
+        });
+
+        // 編輯教材視窗
+        this.el.btnEditMaterial.addEventListener("click", () => this.openEditorModal());
+        this.el.btnCloseEditorModal.addEventListener("click", () => this.closeEditorModal());
+        this.el.btnCancelEdit.addEventListener("click", () => this.closeEditorModal());
+        this.el.btnResetDefault.addEventListener("click", () => {
+          if (confirm("確定要重設為預設教學內容嗎？自訂的修改將會被覆蓋。")) {
+            this.saveSlides(JSON.parse(JSON.stringify(INITIAL_LESSON_DATA)));
+            this.closeEditorModal();
+          }
+        });
+        this.el.btnExportJson.addEventListener("click", () => this.exportJsonFile());
+
+        // 編輯器分頁切換
+        this.el.tabVisual.addEventListener("click", () => this.switchEditorTab("visual"));
+        this.el.tabJson.addEventListener("click", () => this.switchEditorTab("json"));
+        this.el.btnAddSlide.addEventListener("click", () => this.addNewSlideInEditor());
+        this.el.btnSaveMaterial.addEventListener("click", () => this.saveMaterialFromEditor());
+
+        // 全螢幕
+        this.el.btnFullscreen.addEventListener("click", () => this.toggleFullscreen());
+      }
+
+      // 初始化語音引擎
+      initSpeechEngine() {
+        if (!('speechSynthesis' in window)) {
+          alert("很抱歉，您的瀏覽器不支援 Web Speech API 語音合成功能，建議使用最新版 Chrome、Edge 或 Safari。");
+          this.el.voiceStatusText.textContent = "不支援語音";
+          return;
+        }
+
+        const populateVoices = () => {
+          this.availableVoices = this.speechSynth.getVoices();
+          if (this.availableVoices.length === 0) return;
+
+          this.el.selectVoice.innerHTML = "";
+          
+          // 優先尋找繁體中文 (zh-TW)、中文 (zh-HK, zh-CN) 或預設語音
+          let preferredVoice = null;
+
+          this.availableVoices.forEach(voice => {
+            const opt = document.createElement("option");
+            opt.value = voice.voiceURI;
+            opt.textContent = `${voice.name} (${voice.lang})${voice.default ? ' [預設]' : ''}`;
+            this.el.selectVoice.appendChild(opt);
+
+            if (!preferredVoice) {
+              if (voice.lang.includes("zh-TW") || voice.lang.includes("zh_TW")) {
+                preferredVoice = voice;
+              } else if (voice.lang.includes("zh") || voice.lang.includes("cmn")) {
+                preferredVoice = voice;
+              }
+            }
+          });
+
+          if (!preferredVoice && this.availableVoices.length > 0) {
+            preferredVoice = this.availableVoices.find(v => v.default) || this.availableVoices[0];
+          }
+
+          if (preferredVoice) {
+            this.selectedVoice = preferredVoice;
+            this.el.selectVoice.value = preferredVoice.voiceURI;
+          }
+        };
+
+        populateVoices();
+        if (speechSynthesis.onvoiceschanged !== undefined) {
+          speechSynthesis.onvoiceschanged = populateVoices;
+        }
+      }
+
+      // 測試發音效果
+      testVoice() {
+        this.stopSpeech();
+        const testText = "您好！這是瀏覽器預設的教學語音發音測試，語音運作正常。";
+        const utterance = new SpeechSynthesisUtterance(testText);
+        if (this.selectedVoice) utterance.voice = this.selectedVoice;
+        utterance.rate = this.speechRate;
+        utterance.pitch = this.speechPitch;
+        utterance.lang = this.selectedVoice ? this.selectedVoice.lang : "zh-TW";
+        this.speechSynth.speak(utterance);
+      }
+
+      // 渲染當前投影片
+      renderCurrentSlide() {
+        const slide = this.slides[this.currentSlideIndex];
+        if (!slide) return;
+
+        // 換頁進場動畫效果
+        this.el.slideCard.classList.remove("slide-enter-active");
+        this.el.slideCard.classList.add("slide-enter");
+        
+        setTimeout(() => {
+          this.el.slideCard.classList.add("slide-enter-active");
+        }, 30);
+
+        // 更新頂部與標籤
+        this.el.slideTag.textContent = slide.tag || `單元 0${this.currentSlideIndex + 1}`;
+        this.el.slideCounterBadge.textContent = `${String(this.currentSlideIndex + 1).padStart(2, '0')} / ${String(this.slides.length).padStart(2, '0')}`;
+        this.el.slideTotalCount.textContent = this.slides.length;
+        this.el.slideTitle.textContent = slide.title;
+        this.el.slideSubtitle.textContent = slide.subtitle || "";
+        this.el.speechScript.textContent = slide.speech;
+
+        // 進度條比例
+        const progressPct = ((this.currentSlideIndex + 1) / this.slides.length) * 100;
+        this.el.progressBar.style.width = `${progressPct}%`;
+
+        // 渲染條列重點與延遲動畫
+        this.el.bulletContainer.innerHTML = "";
+        if (slide.bullets && slide.bullets.length > 0) {
+          slide.bullets.forEach((bulletText, idx) => {
+            const bDiv = document.createElement("div");
+            bDiv.className = "bullet-item flex items-start space-x-3 bg-slate-800/40 border border-slate-700/40 p-3.5 rounded-xl hover:bg-slate-800/70 transition-colors";
+            bDiv.innerHTML = `
+              <div class="w-5 h-5 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold text-xs shrink-0 mt-0.5 border border-indigo-500/30">
+                ${idx + 1}
+              </div>
+              <p class="text-slate-200 text-sm leading-relaxed">${bulletText}</p>
+            `;
+            this.el.bulletContainer.appendChild(bDiv);
+
+            // 依序漸顯
+            setTimeout(() => {
+              bDiv.classList.add("visible");
+            }, 120 * (idx + 1));
+          });
+        }
+
+        // 渲染右側視覺動畫元件
+        this.renderVisualGraphic(slide);
+
+        // 更新側邊欄高亮
+        this.updateThumbnailActiveState();
+      }
+
+      // 渲染右側視覺動畫與圖解
+      renderVisualGraphic(slide) {
+        const v = slide.visualData || {};
+        let html = "";
+
+        switch(slide.visualType) {
+          case "badge":
+            html = `
+              <div class="animate-bounce mb-3 text-5xl">${v.icon || "🎓"}</div>
+              <h4 class="text-white font-bold text-base mb-1">${v.label || "重點精要"}</h4>
+              <p class="text-slate-400 text-xs px-4">${v.desc || "掌握人機協作精髓"}</p>
+            `;
+            break;
+          case "pipeline":
+            html = `
+              <div class="w-full space-y-2 py-1 text-left">
+                <div class="p-2.5 bg-slate-800 rounded-lg border border-indigo-500/30 flex items-center justify-between text-xs text-indigo-300">
+                  <span>1. ${v.step1 || "輸入剖析"}</span>
+                  <span class="text-indigo-400 text-[10px]">解析語意</span>
+                </div>
+                <div class="text-center text-slate-500 text-xs">↓</div>
+                <div class="p-2.5 bg-slate-800 rounded-lg border border-purple-500/30 flex items-center justify-between text-xs text-purple-300">
+                  <span>2. ${v.step2 || "多頭注意力"}</span>
+                  <span class="text-purple-400 text-[10px]">關聯權重</span>
+                </div>
+                <div class="text-center text-slate-500 text-xs">↓</div>
+                <div class="p-2.5 bg-indigo-950/80 rounded-lg border border-cyan-500/40 flex items-center justify-between text-xs text-cyan-300 font-semibold shadow">
+                  <span>3. ${v.step3 || "智慧預測輸出"}</span>
+                  <span class="text-cyan-400 text-[10px]">機率解碼</span>
+                </div>
+              </div>
+            `;
+            break;
+          case "framework":
+            const items = v.items || ["角色", "任務", "情境", "格式"];
+            html = `
+              <div class="grid grid-cols-2 gap-2.5 w-full">
+                ${items.map((item, i) => `
+                  <div class="p-3 bg-slate-800/90 rounded-xl border border-slate-700/80 text-center hover:border-indigo-500/60 transition group">
+                    <div class="text-indigo-400 text-xs font-mono font-bold">0${i+1}</div>
+                    <div class="text-white text-xs font-semibold mt-1 group-hover:text-indigo-300">${item}</div>
+                  </div>
+                `).join('')}
+              </div>
+            `;
+            break;
+          case "cards":
+            html = `
+              <div class="w-full space-y-2 text-left">
+                <div class="p-2 bg-slate-800/80 border border-slate-700 rounded-lg text-xs">
+                  <span class="text-amber-400 font-bold">● 資訊提煉：</span>
+                  <span class="text-slate-300">秒速濃縮千字文獻核心</span>
+                </div>
+                <div class="p-2 bg-slate-800/80 border border-slate-700 rounded-lg text-xs">
+                  <span class="text-cyan-400 font-bold">● 程式編程：</span>
+                  <span class="text-slate-300">語法除錯與演算法重構</span>
+                </div>
+                <div class="p-2 bg-slate-800/80 border border-slate-700 rounded-lg text-xs">
+                  <span class="text-emerald-400 font-bold">● 思考激發：</span>
+                  <span class="text-slate-300">多視角論點驗證與啟發</span>
+                </div>
+              </div>
+            `;
+            break;
+          case "safety":
+            html = `
+              <div class="text-center w-full">
+                <div class="w-12 h-12 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center mx-auto mb-2 text-xl font-bold border border-amber-500/30">
+                  🛡️
+                </div>
+                <h5 class="text-sm font-semibold text-white mb-2">安全查證防線</h5>
+                <div class="text-xs text-slate-300 space-y-1.5 text-left bg-slate-950/60 p-2.5 rounded-lg border border-slate-800">
+                  <div class="flex items-center gap-1.5 text-amber-300">✓ 事實交叉比對</div>
+                  <div class="flex items-center gap-1.5 text-amber-300">✓ 嚴格隱私過濾</div>
+                  <div class="flex items-center gap-1.5 text-amber-300">✓ 保留人本決策權</div>
+                </div>
+              </div>
+            `;
+            break;
+          case "finish":
+            html = `
+              <div class="text-center py-2">
+                <div class="text-4xl mb-2 animate-pulse">🏆</div>
+                <h4 class="text-base font-bold text-emerald-400">${v.badge || "單元結束"}</h4>
+                <p class="text-xs text-slate-300 mt-1">${v.msg || "恭喜完成本教學"}</p>
+                <div class="mt-3 inline-block px-3 py-1 bg-emerald-500/20 text-emerald-300 text-[11px] rounded-full border border-emerald-500/30">
+                  Ready for Practice
+                </div>
+              </div>
+            `;
+            break;
+          default:
+            html = `
+              <div class="text-center">
+                <div class="text-3xl mb-2">✨</div>
+                <p class="text-xs text-slate-300 font-medium">觀念互動解析</p>
+              </div>
+            `;
+        }
+
+        this.el.visualContainer.innerHTML = html;
+      }
+
+      // 渲染左側縮圖清單
+      renderThumbnails() {
+        this.el.thumbnailsList.innerHTML = "";
+        this.slides.forEach((slide, idx) => {
+          const item = document.createElement("button");
+          item.className = `w-full text-left p-3 rounded-xl border transition-all flex flex-col space-y-1 text-xs cursor-pointer ${
+            idx === this.currentSlideIndex 
+              ? 'bg-indigo-600/25 border-indigo-500/60 text-white shadow-md' 
+              : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:bg-slate-850 hover:border-slate-700 hover:text-slate-200'
+          }`;
+          item.innerHTML = `
+            <div class="flex items-center justify-between text-[11px]">
+              <span class="font-mono text-indigo-400 font-semibold">P.${String(idx+1).padStart(2, '0')}</span>
+              <span class="text-[10px] text-slate-400 truncate max-w-[120px]">${slide.tag || ''}</span>
+            </div>
+            <div class="font-medium text-slate-200 truncate w-full">${slide.title}</div>
+          `;
+          item.addEventListener("click", () => {
+            this.goToSlide(idx);
+          });
+          this.el.thumbnailsList.appendChild(item);
+        });
+      }
+
+      updateThumbnailActiveState() {
+        const items = this.el.thumbnailsList.children;
+        for (let i = 0; i < items.length; i++) {
+          if (i === this.currentSlideIndex) {
+            items[i].className = "w-full text-left p-3 rounded-xl border transition-all flex flex-col space-y-1 text-xs cursor-pointer bg-indigo-600/25 border-indigo-500/60 text-white shadow-md";
+          } else {
+            items[i].className = "w-full text-left p-3 rounded-xl border transition-all flex flex-col space-y-1 text-xs cursor-pointer bg-slate-900/60 border-slate-800 text-slate-400 hover:bg-slate-800 hover:border-slate-700 hover:text-slate-200";
+          }
+        }
+      }
+
+      // 語音播放核心
+      speakCurrentSlide() {
+        this.stopSpeech();
+
+        const slide = this.slides[this.currentSlideIndex];
+        if (!slide || !slide.speech) return;
+
+        const textToSpeak = slide.speech;
+        this.currentUtterance = new SpeechSynthesisUtterance(textToSpeak);
+
+        if (this.selectedVoice) {
+          this.currentUtterance.voice = this.selectedVoice;
+        }
+        this.currentUtterance.rate = this.speechRate;
+        this.currentUtterance.pitch = this.speechPitch;
+
+        // 語音開始事件
+        this.currentUtterance.onstart = () => {
+          this.isSpeaking = true;
+          this.isPlaying = true;
+          this.updatePlayPauseUi(true);
+          this.setSpeakingState(true);
+        };
+
+        // 語音結束事件 (支援自動換頁)
+        this.currentUtterance.onend = () => {
+          this.isSpeaking = false;
+          this.setSpeakingState(false);
+
+          if (this.autoNext && this.isPlaying) {
+            // 自動過渡至下一頁
+            if (this.currentSlideIndex < this.slides.length - 1) {
+              setTimeout(() => {
+                if (this.isPlaying) {
+                  this.nextSlide(true); // 自動播放下一頁
+                }
+              }, 1200);
+            } else {
+              // 播完全部簡報
+              this.isPlaying = false;
+              this.updatePlayPauseUi(false);
+            }
+          } else {
+            this.updatePlayPauseUi(false);
+          }
+        };
+
+        this.currentUtterance.onerror = (e) => {
+          console.warn("Speech error:", e);
+          this.isSpeaking = false;
+          this.setSpeakingState(false);
+          this.updatePlayPauseUi(false);
+        };
+
+        // Chrome 瀏覽器長文本垃圾回收 Bug 防護
+        this.speechSynth.cancel(); // 清空隊列防阻塞
+        this.speechSynth.speak(this.currentUtterance);
+      }
+
+      stopSpeech() {
+        if (this.speechSynth.speaking || this.speechSynth.pending) {
+          this.speechSynth.cancel();
+        }
+        this.isSpeaking = false;
+        this.setSpeakingState(false);
+      }
+
+      togglePlayPause() {
+        if (this.isSpeaking) {
+          // 正在朗讀時暫停/停止
+          this.isPlaying = false;
+          this.stopSpeech();
+          this.updatePlayPauseUi(false);
+        } else {
+          // 開始播放
+          this.isPlaying = true;
+          this.updatePlayPauseUi(true);
+          this.speakCurrentSlide();
+        }
+      }
+
+      updatePlayPauseUi(playing) {
+        if (playing) {
+          this.el.iconPlay.classList.add("hidden");
+          this.el.iconPause.classList.remove("hidden");
+          this.el.playPauseText.textContent = "暫停教學";
+        } else {
+          this.el.iconPlay.classList.remove("hidden");
+          this.el.iconPause.classList.add("hidden");
+          this.el.playPauseText.textContent = "播放教學";
+        }
+      }
+
+      setSpeakingState(active) {
+        if (active) {
+          this.el.voiceIndicator.classList.add("speaking");
+          this.el.voiceIndicator.classList.remove("border-slate-700/60");
+          this.el.voiceIndicator.classList.add("border-indigo-500/70", "bg-indigo-950/40");
+          this.el.voiceStatusText.textContent = "朗讀中...";
+          this.el.voiceStatusText.classList.remove("text-slate-400");
+          this.el.voiceStatusText.classList.add("text-indigo-300");
+        } else {
+          this.el.voiceIndicator.classList.remove("speaking");
+          this.el.voiceIndicator.classList.remove("border-indigo-500/70", "bg-indigo-950/40");
+          this.el.voiceIndicator.classList.add("border-slate-700/60");
+          this.el.voiceStatusText.textContent = "語音待命";
+          this.el.voiceStatusText.classList.remove("text-indigo-300");
+          this.el.voiceStatusText.classList.add("text-slate-400");
+        }
+      }
+
+      // 切換上一頁
+      prevSlide() {
+        if (this.currentSlideIndex > 0) {
+          this.currentSlideIndex--;
+          this.renderCurrentSlide();
+          if (this.isPlaying) {
+            this.speakCurrentSlide();
+          } else {
+            this.stopSpeech();
+          }
+        }
+      }
+
+      // 切換下一頁
+      nextSlide(autoTriggered = false) {
+        if (this.currentSlideIndex < this.slides.length - 1) {
+          this.currentSlideIndex++;
+          this.renderCurrentSlide();
+          if (this.isPlaying || autoTriggered) {
+            this.speakCurrentSlide();
+          } else {
+            this.stopSpeech();
+          }
+        } else {
+          if (autoTriggered) {
+            this.isPlaying = false;
+            this.updatePlayPauseUi(false);
+          }
+        }
+      }
+
+      goToSlide(index) {
+        if (index >= 0 && index < this.slides.length) {
+          this.currentSlideIndex = index;
+          this.renderCurrentSlide();
+          if (this.isPlaying) {
+            this.speakCurrentSlide();
+          } else {
+            this.stopSpeech();
+          }
+        }
+      }
+
+      toggleFullscreen() {
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen().catch(err => {
+            console.warn(`Error attempting to enable full-screen mode: ${err.message}`);
+          });
+        } else {
+          document.exitFullscreen();
+        }
+      }
+
+      // 編輯器視窗控制
+      openEditorModal() {
+        this.stopSpeech();
+        this.isPlaying = false;
+        this.updatePlayPauseUi(false);
+        this.renderEditorSlideList();
+        this.el.txtJsonImport.value = JSON.stringify(this.slides, null, 2);
+        this.el.modalEditor.classList.remove("hidden");
+      }
+
+      closeEditorModal() {
+        this.el.modalEditor.classList.add("hidden");
+      }
+
+      switchEditorTab(tab) {
+        if (tab === "visual") {
+          this.el.tabVisual.className = "py-2.5 px-4 text-xs font-semibold text-indigo-400 border-b-2 border-indigo-500 transition";
+          this.el.tabJson.className = "py-2.5 px-4 text-xs font-semibold text-slate-400 hover:text-slate-200 transition";
+          this.el.panelVisual.classList.remove("hidden");
+          this.el.panelJson.classList.add("hidden");
+        } else {
+          this.el.tabJson.className = "py-2.5 px-4 text-xs font-semibold text-indigo-400 border-b-2 border-indigo-500 transition";
+          this.el.tabVisual.className = "py-2.5 px-4 text-xs font-semibold text-slate-400 hover:text-slate-200 transition";
+          this.el.panelJson.classList.remove("hidden");
+          this.el.panelVisual.classList.add("hidden");
+          this.el.txtJsonImport.value = JSON.stringify(this.getEditedSlidesFromVisual(), null, 2);
+        }
+      }
+
+      renderEditorSlideList() {
+        this.el.editorSlideList.innerHTML = "";
+        this.slides.forEach((slide, idx) => {
+          const card = document.createElement("div");
+          card.className = "p-4 bg-slate-950/80 border border-slate-800 rounded-xl space-y-3";
+          card.dataset.index = idx;
+          card.innerHTML = `
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-mono font-bold text-indigo-400"># 投影片 ${idx + 1}</span>
+              <button type="button" class="btn-delete-slide text-xs text-rose-400 hover:text-rose-300">刪除此頁</button>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label class="block text-[11px] text-slate-400 mb-1">標籤/單元名稱</label>
+                <input type="text" class="inp-tag w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500" value="${slide.tag || ''}">
+              </div>
+              <div>
+                <label class="block text-[11px] text-slate-400 mb-1">投影片標題</label>
+                <input type="text" class="inp-title w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500" value="${slide.title || ''}">
+              </div>
+            </div>
+            <div>
+              <label class="block text-[11px] text-slate-400 mb-1">副標題/核心摘要</label>
+              <input type="text" class="inp-subtitle w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500" value="${slide.subtitle || ''}">
+            </div>
+            <div>
+              <label class="block text-[11px] text-slate-400 mb-1">重點項目清單 (每行一項)</label>
+              <textarea class="inp-bullets w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 h-16 resize-none leading-relaxed">${(slide.bullets || []).join('\n')}</textarea>
+            </div>
+            <div>
+              <label class="block text-[11px] text-indigo-300 font-semibold mb-1">🔊 瀏覽器語音朗讀口白 (講稿)</label>
+              <textarea class="inp-speech w-full bg-slate-900 border border-indigo-500/40 rounded-lg p-2.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-400 h-20 resize-none leading-relaxed">${slide.speech || ''}</textarea>
+            </div>
+          `;
+
+          // 刪除按鈕事件
+          card.querySelector(".btn-delete-slide").addEventListener("click", () => {
+            if (this.el.editorSlideList.children.length <= 1) {
+              alert("至少需要保留一頁投影片！");
+              return;
+            }
+            card.remove();
+          });
+
+          this.el.editorSlideList.appendChild(card);
+        });
+      }
+
+      addNewSlideInEditor() {
+        const newSlide = {
+          id: Date.now(),
+          tag: `單元 0${this.el.editorSlideList.children.length + 1}`,
+          title: "新投影片標題",
+          subtitle: "點此輸入新章節說明",
+          speech: "這是新投影片的語音講稿內容，請在此輸入教學口白。",
+          visualType: "badge",
+          visualData: { icon: "💡", label: "核心知識點", desc: "請輸入視覺說明" },
+          bullets: ["重點項目 1", "重點項目 2"]
+        };
+
+        const idx = this.el.editorSlideList.children.length;
+        const card = document.createElement("div");
+        card.className = "p-4 bg-slate-950/80 border border-slate-800 rounded-xl space-y-3";
+        card.dataset.index = idx;
+        card.innerHTML = `
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-mono font-bold text-indigo-400"># 投影片 ${idx + 1}</span>
+            <button type="button" class="btn-delete-slide text-xs text-rose-400 hover:text-rose-300">刪除此頁</button>
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-[11px] text-slate-400 mb-1">標籤/單元名稱</label>
+              <input type="text" class="inp-tag w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200" value="${newSlide.tag}">
+            </div>
+            <div>
+              <label class="block text-[11px] text-slate-400 mb-1">投影片標題</label>
+              <input type="text" class="inp-title w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200" value="${newSlide.title}">
+            </div>
+          </div>
+          <div>
+            <label class="block text-[11px] text-slate-400 mb-1">副標題/核心摘要</label>
+            <input type="text" class="inp-subtitle w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200" value="${newSlide.subtitle}">
+          </div>
+          <div>
+            <label class="block text-[11px] text-slate-400 mb-1">重點項目清單 (每行一項)</label>
+            <textarea class="inp-bullets w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 h-16 resize-none leading-relaxed">${newSlide.bullets.join('\n')}</textarea>
+          </div>
+          <div>
+            <label class="block text-[11px] text-indigo-300 font-semibold mb-1">🔊 瀏覽器語音朗讀口白 (講稿)</label>
+            <textarea class="inp-speech w-full bg-slate-900 border border-indigo-500/40 rounded-lg p-2.5 text-xs text-slate-100 h-20 resize-none leading-relaxed">${newSlide.speech}</textarea>
+          </div>
+        `;
+        card.querySelector(".btn-delete-slide").addEventListener("click", () => card.remove());
+        this.el.editorSlideList.appendChild(card);
+        card.scrollIntoView({ behavior: 'smooth' });
+      }
+
+      getEditedSlidesFromVisual() {
+        const cards = Array.from(this.el.editorSlideList.children);
+        return cards.map((card, i) => {
+          const original = this.slides[i] || {};
+          const bulletsText = card.querySelector(".inp-bullets").value.trim();
+          return {
+            id: original.id || i + 1,
+            tag: card.querySelector(".inp-tag").value.trim(),
+            title: card.querySelector(".inp-title").value.trim() || `第 ${i+1} 頁`,
+            subtitle: card.querySelector(".inp-subtitle").value.trim(),
+            speech: card.querySelector(".inp-speech").value.trim() || "本頁暫無口白",
+            visualType: original.visualType || "badge",
+            visualData: original.visualData || { icon: "📌", label: "要點指引", desc: "" },
+            bullets: bulletsText ? bulletsText.split('\n').map(s => s.trim()).filter(Boolean) : []
+          };
+        });
+      }
+
+      saveMaterialFromEditor() {
+        let updatedSlides = [];
+        if (!this.el.panelJson.classList.contains("hidden")) {
+          // 從 JSON 文字區儲存
+          try {
+            const parsed = JSON.parse(this.el.txtJsonImport.value);
+            if (!Array.isArray(parsed) || parsed.length === 0) {
+              alert("JSON 必須是包含投影片物件的陣列 (Array)！");
+              return;
+            }
+            updatedSlides = parsed;
+          } catch(e) {
+            alert("JSON 語法格式有誤，請檢查括號或逗號：\n" + e.message);
+            return;
+          }
+        } else {
+          // 從視覺化表單儲存
+          updatedSlides = this.getEditedSlidesFromVisual();
+        }
+
+        if (updatedSlides.length === 0) {
+          alert("投影片清單不能為空！");
+          return;
+        }
+
+        this.currentSlideIndex = 0;
+        this.saveSlides(updatedSlides);
+        this.closeEditorModal();
+      }
+
+      exportJsonFile() {
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(this.slides, null, 2));
+        const dlAnchor = document.createElement('a');
+        dlAnchor.setAttribute("href", dataStr);
+        dlAnchor.setAttribute("download", "lesson_material.json");
+        dlAnchor.click();
+      }
+    }
+
+    // 頁面載入後啟動應用
+    window.addEventListener("DOMContentLoaded", () => {
+      window.app = new PresentationApp();
+    });
+  </script>
+</body>
+</html>
